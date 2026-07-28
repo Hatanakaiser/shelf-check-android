@@ -1,0 +1,10 @@
+# Dependencies
+node_modules/
+
+# Build outputs
+dist/
+build/
+
+# Temp & Cache
+.DS_Store
+*.log
