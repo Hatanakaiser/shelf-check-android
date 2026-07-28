@@ -33,6 +33,13 @@ data class MatchResult(
     val message: String
 )
 
+private data class DataTuple(
+    val series: List<SeriesEntity>,
+    val books: List<BookEntity>,
+    val groups: List<BookshelfSeriesGroup>,
+    val shopping: List<ShoppingItemEntity>
+)
+
 @HiltViewModel
 class MainViewModel @Inject constructor(
     private val repository: BookRepository
@@ -47,20 +54,29 @@ class MainViewModel @Inject constructor(
 
     init {
         viewModelScope.launch {
-            combine(
+            val uiStateFlow = combine(
                 _searchQuery,
                 _isShoppingMode,
-                _selectedMatchResult,
+                _selectedMatchResult
+            ) { query, shoppingMode, matchResult ->
+                Triple(query, shoppingMode, matchResult)
+            }
+
+            val dataFlow = combine(
                 repository.allSeries,
                 repository.allBooks,
                 repository.bookshelfGroups,
                 repository.allShoppingItems
-            ) { query, shoppingMode, matchResult, series, books, groups, shopping ->
+            ) { series, books, groups, shopping ->
+                DataTuple(series, books, groups, shopping)
+            }
+
+            combine(uiStateFlow, dataFlow) { (query, shoppingMode, matchResult), data ->
                 val filteredSeries = if (query.isBlank()) {
-                    series
+                    data.series
                 } else {
                     val q = query.lowercase().trim()
-                    series.filter {
+                    data.series.filter {
                         it.title.lowercase().contains(q) ||
                         (it.titleKana != null && it.titleKana.lowercase().contains(q)) ||
                         (it.author != null && it.author.lowercase().contains(q))
@@ -70,9 +86,9 @@ class MainViewModel @Inject constructor(
                 MainUiState(
                     searchQuery = query,
                     seriesList = filteredSeries,
-                    booksList = books,
-                    bookshelfGroups = groups,
-                    shoppingItems = shopping,
+                    booksList = data.books,
+                    bookshelfGroups = data.groups,
+                    shoppingItems = data.shopping,
                     selectedMatchResult = matchResult,
                     isShoppingMode = shoppingMode
                 )
