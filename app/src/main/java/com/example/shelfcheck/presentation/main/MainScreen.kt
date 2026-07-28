@@ -1,7 +1,6 @@
 package com.example.shelfcheck.presentation.main
 
 import androidx.compose.foundation.background
-import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.lazy.LazyColumn
@@ -9,7 +8,6 @@ import androidx.compose.foundation.lazy.grid.GridCells
 import androidx.compose.foundation.lazy.grid.LazyVerticalGrid
 import androidx.compose.foundation.lazy.grid.items
 import androidx.compose.foundation.lazy.items
-import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.*
@@ -28,7 +26,7 @@ import com.example.shelfcheck.domain.BookStatus
 import com.example.shelfcheck.domain.BookshelfSeriesGroup
 import com.example.shelfcheck.presentation.theme.*
 
-@OptIn(ExperimentalMaterial3Api::class)
+@OptIn(ExperimentalMaterial3Api::class, ExperimentalLayoutApi::class)
 @Composable
 fun MainScreen(
     viewModel: MainViewModel
@@ -130,6 +128,7 @@ fun MainScreen(
 }
 
 // --- Tab 1: 0.05秒インクリメンタルテキスト検索 ＆ 4色判定 ---
+@OptIn(ExperimentalLayoutApi::class)
 @Composable
 fun SearchTabContent(
     uiState: MainUiState,
@@ -232,6 +231,7 @@ fun SearchTabContent(
     }
 }
 
+@OptIn(ExperimentalLayoutApi::class)
 @Composable
 fun SeriesMatrixCard(
     series: SeriesEntity,
@@ -327,6 +327,7 @@ fun KindleBookshelfTabContent(
     }
 }
 
+@OptIn(ExperimentalLayoutApi::class)
 @Composable
 fun KindleSeriesCard(
     group: BookshelfSeriesGroup,
@@ -458,7 +459,7 @@ fun ShoppingTabContent(
         Spacer(modifier = Modifier.height(16.dp))
 
         if (uiState.shoppingItems.isEmpty()) {
-          Text("🛒 買い出しリストに登録された本はありません。", color = Slate400)
+            Text("🛒 買い出しリストに登録された本はありません。", color = Slate400)
         } else {
             LazyColumn(verticalArrangement = Arrangement.spacedBy(10.dp)) {
                 items(uiState.shoppingItems) { item ->
