@@ -1,12 +1,12 @@
 import React from 'react';
-import { BookMarked, ShoppingBag } from 'lucide-react';
+import { BookMarked, Sparkles } from 'lucide-react';
 
 interface HeaderProps {
-  isShoppingMode: boolean;
-  onToggleShoppingMode: () => void;
+  isMangaOnly: boolean;
+  onToggleMangaOnly: () => void;
 }
 
-export const Header: React.FC<HeaderProps> = ({ isShoppingMode, onToggleShoppingMode }) => {
+export const Header: React.FC<HeaderProps> = ({ isMangaOnly, onToggleMangaOnly }) => {
   return (
     <header style={{
       height: '56px',
@@ -43,25 +43,25 @@ export const Header: React.FC<HeaderProps> = ({ isShoppingMode, onToggleShopping
         </div>
       </div>
 
-      {/* 買い物モードトグルスイッチ */}
+      {/* 🎨 漫画のみ絞り込みトグルボタン */}
       <button
-        onClick={onToggleShoppingMode}
+        onClick={onToggleMangaOnly}
         style={{
           display: 'flex',
           alignItems: 'center',
           gap: '6px',
           padding: '6px 12px',
           borderRadius: '20px',
-          backgroundColor: isShoppingMode ? 'rgba(34, 197, 94, 0.15)' : 'var(--color-bg-card-hover)',
-          border: isShoppingMode ? '1px solid #22c55e' : '1px solid var(--color-border)',
-          color: isShoppingMode ? '#22c55e' : 'var(--color-text-sub)',
+          backgroundColor: isMangaOnly ? 'rgba(59, 130, 246, 0.15)' : 'var(--color-bg-card-hover)',
+          border: isMangaOnly ? '1px solid #3b82f6' : '1px solid var(--color-border)',
+          color: isMangaOnly ? '#3b82f6' : 'var(--color-text-sub)',
           fontSize: '0.78rem',
-          fontWeight: 700,
+          fontWeight: 800,
           transition: 'all 0.2s ease'
         }}
       >
-        <ShoppingBag size={14} />
-        <span>{isShoppingMode ? '買い物モード ON' : '通常モード'}</span>
+        <Sparkles size={14} color={isMangaOnly ? '#3b82f6' : 'var(--color-text-sub)'} />
+        <span>{isMangaOnly ? '🎨 漫画のみ' : '📚 全書籍'}</span>
       </button>
     </header>
   );

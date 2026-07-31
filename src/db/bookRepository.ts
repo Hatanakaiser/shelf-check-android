@@ -81,21 +81,14 @@ function formatMatchResult(book: Book, series?: Series): ScanMatchResult {
         status: 'owned',
         matchedBook: book,
         matchedSeries: series,
-        message: `⚠️ すでに所持しています！ (${titleText})`
+        message: `🟩 すでに所持しています (${titleText})`
       };
     case 'wanted':
       return {
         status: 'wanted',
         matchedBook: book,
         matchedSeries: series,
-        message: `✅ 探していた本（買い出し対象）です！ (${titleText})`
-      };
-    case 'sold':
-      return {
-        status: 'sold',
-        matchedBook: book,
-        matchedSeries: series,
-        message: `⚠️ 過去に売却済みの本です (${titleText})`
+        message: `🟨 探していた本（買いたい本）です！ (${titleText})`
       };
     default:
       return {
@@ -116,13 +109,19 @@ export async function updateBookStatus(bookId: string | number, newStatus: BookS
 
   const book = await db.books.get(bookId);
   if (book && book.seriesId) {
+    const sIdStr = String(book.seriesId);
+    const items = await db.shoppingItems.where('seriesId').equals(sIdStr).toArray();
+    
     if (newStatus === 'owned') {
-      await db.shoppingItems.where({ seriesId: String(book.seriesId), volume: book.volume }).delete();
+      const targetItems = items.filter(i => i.volume === book.volume);
+      for (const item of targetItems) {
+        if (item.id) await db.shoppingItems.delete(item.id);
+      }
     } else if (newStatus === 'wanted') {
-      const exists = await db.shoppingItems.where({ seriesId: String(book.seriesId), volume: book.volume }).count();
-      if (exists === 0) {
+      const exists = items.some(i => i.volume === book.volume);
+      if (!exists) {
         await db.shoppingItems.add({
-          seriesId: String(book.seriesId),
+          seriesId: sIdStr,
           seriesTitle: book.title,
           volume: book.volume,
           priority: 'high',
@@ -131,6 +130,28 @@ export async function updateBookStatus(bookId: string | number, newStatus: BookS
         });
       }
     }
+  }
+}
+
+/**
+ * 書籍の削除 ＆ 買い出しリストからの自動クリーンアップ
+ */
+export async function removeBook(seriesId: string, volumeStr: string, bookId?: string | number) {
+  if (bookId) {
+    await db.books.delete(bookId);
+  } else {
+    const sIdStr = String(seriesId);
+    const books = await db.books.where('seriesId').equals(sIdStr).toArray();
+    const targetBook = books.find(b => b.volume === volumeStr);
+    if (targetBook && targetBook.id) {
+      await db.books.delete(targetBook.id);
+    }
+  }
+
+  const items = await db.shoppingItems.where('seriesId').equals(String(seriesId)).toArray();
+  const targetItems = items.filter(i => i.volume === volumeStr);
+  for (const item of targetItems) {
+    if (item.id) await db.shoppingItems.delete(item.id);
   }
 }
 
@@ -157,6 +178,135 @@ export async function addBook(bookData: Omit<Book, 'id' | 'createdAt' | 'updated
   }
 
   return newId;
+}
+
+export async function isSeriesRegistered(title: string): Promise<boolean> {
+  if (!title) return false;
+  const cleanTitle = title.trim().toLowerCase();
+  const allSeries = await db.series.toArray();
+  return allSeries.some(s => s.title.trim().toLowerCase() === cleanTitle);
+}
+
+export async function addSeries(
+  seriesData: Omit<Series, 'id' | 'createdAt' | 'updatedAt'>,
+  initialOwnedStart?: number,
+  initialOwnedEnd?: number
+): Promise<number> {
+  const now = new Date().toISOString().split('T')[0];
+  const cleanTitle = seriesData.title.trim().toLowerCase();
+
+  // 重複チェック: 同一タイトルのシリーズが既に存在する場合は既存IDを返し、更新のみ行う
+  const allSeries = await db.series.toArray();
+  const existingSeries = allSeries.find(s => s.title.trim().toLowerCase() === cleanTitle);
+
+  let sIdNum: number;
+  if (existingSeries && existingSeries.id) {
+    sIdNum = Number(existingSeries.id);
+    // 既存シリーズの更新（巻数が増えた場合など）
+    const updatedTotal = Math.max(existingSeries.totalVolumes || 0, seriesData.totalVolumes || 0);
+    await db.series.update(sIdNum, {
+      totalVolumes: updatedTotal,
+      coverUrl: seriesData.coverUrl || existingSeries.coverUrl,
+      updatedAt: now
+    });
+  } else {
+    // 新規シリーズレコード挿入
+    const newSeriesId = await db.series.add({
+      ...seriesData,
+      title: seriesData.title.trim(),
+      createdAt: now,
+      updatedAt: now
+    });
+    sIdNum = Number(newSeriesId);
+  }
+
+  const sIdStr = String(sIdNum);
+
+  // 初期所持巻範囲がある場合はまとめて追加 (未追加の巻のみ)
+  if (initialOwnedStart && initialOwnedEnd && initialOwnedStart <= initialOwnedEnd) {
+    for (let i = initialOwnedStart; i <= initialOwnedEnd; i++) {
+      const volStr = String(i);
+      const existingBook = await db.books.where({ seriesId: sIdStr, volume: volStr }).first();
+      if (!existingBook) {
+        await db.books.add({
+          seriesId: sIdStr,
+          title: seriesData.title,
+          volume: volStr,
+          volumeSortKey: i,
+          status: 'owned',
+          isTemporary: false,
+          createdAt: now,
+          updatedAt: now
+        });
+      }
+    }
+  }
+
+  return sIdNum;
+}
+
+export async function updateSeries(
+  seriesId: string | number,
+  seriesData: Partial<Omit<Series, 'id' | 'createdAt' | 'updatedAt'>>
+) {
+  const now = new Date().toISOString().split('T')[0];
+  await db.series.update(seriesId, {
+    ...seriesData,
+    updatedAt: now
+  });
+
+  // シリーズ名が変更された場合、紐づくbookやshoppingItemのタイトルも更新
+  if (seriesData.title) {
+    const sIdStr = String(seriesId);
+    const books = await db.books.where({ seriesId: sIdStr }).toArray();
+    for (const b of books) {
+      if (b.id) {
+        await db.books.update(b.id, { title: seriesData.title, updatedAt: now });
+      }
+    }
+    const items = await db.shoppingItems.where({ seriesId: sIdStr }).toArray();
+    for (const item of items) {
+      if (item.id) {
+        await db.shoppingItems.update(item.id, { seriesTitle: seriesData.title });
+      }
+    }
+  }
+}
+
+export async function deleteSeries(seriesId: string | number) {
+  const sIdStr = String(seriesId);
+  await db.series.delete(seriesId);
+  await db.books.where({ seriesId: sIdStr }).delete();
+  await db.shoppingItems.where({ seriesId: sIdStr }).delete();
+}
+
+export async function bulkSetVolumeStatus(
+  seriesId: string | number,
+  seriesTitle: string,
+  startVol: number,
+  endVol: number,
+  newStatus: BookStatus
+) {
+  const sIdStr = String(seriesId);
+  const now = new Date().toISOString().split('T')[0];
+
+  for (let i = startVol; i <= endVol; i++) {
+    const volStr = String(i);
+    const existing = await db.books.where({ seriesId: sIdStr, volume: volStr }).first();
+
+    if (existing && existing.id) {
+      await updateBookStatus(existing.id, newStatus);
+    } else if (newStatus !== 'unregistered') {
+      await addBook({
+        seriesId: sIdStr,
+        title: seriesTitle,
+        volume: volStr,
+        volumeSortKey: i,
+        status: newStatus,
+        isTemporary: false
+      });
+    }
+  }
 }
 
 /**
@@ -189,3 +339,4 @@ export async function getBookshelfSeriesGroups(): Promise<BookshelfSeriesGroup[]
     };
   });
 }
+

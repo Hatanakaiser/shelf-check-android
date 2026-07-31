@@ -63,7 +63,7 @@ abstract class AppDatabase : RoomDatabase() {
                     publisher = "芳文社",
                     totalVolumes = 15,
                     isCompleted = false,
-                    coverUrl = "covers/yuyushiki1.jpg",
+                    coverUrl = "https://cover.openbd.jp/9784832277946.jpg",
                     createdAt = now,
                     updatedAt = now
                 )
@@ -78,7 +78,7 @@ abstract class AppDatabase : RoomDatabase() {
                     publisher = "集英社",
                     totalVolumes = 26,
                     isCompleted = false,
-                    coverUrl = "covers/jujutsu.jpg",
+                    coverUrl = "https://cover.openbd.jp/9784088815169.jpg",
                     createdAt = now,
                     updatedAt = now
                 )
@@ -93,7 +93,7 @@ abstract class AppDatabase : RoomDatabase() {
                     volume = "1",
                     volumeSortKey = 1.0,
                     status = BookStatus.OWNED,
-                    coverUrl = "covers/yuyushiki1.jpg",
+                    coverUrl = "https://cover.openbd.jp/9784832277946.jpg",
                     createdAt = now,
                     updatedAt = now
                 )
@@ -123,7 +123,7 @@ abstract class AppDatabase : RoomDatabase() {
                     volume = "15",
                     volumeSortKey = 15.0,
                     status = BookStatus.WANTED,
-                    coverUrl = "covers/yuyushiki15.jpg",
+                    coverUrl = "https://cover.openbd.jp/9784832295322.jpg",
                     createdAt = now,
                     updatedAt = now
                 )

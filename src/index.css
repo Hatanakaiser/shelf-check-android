@@ -6,14 +6,14 @@
   --color-text-main: #f8fafc;
   --color-text-sub: #94a3b8;
   
-  --color-status-owned: #ef4444;
-  --color-status-owned-bg: #450a0a;
+  --color-status-owned: #22c55e;
+  --color-status-owned-bg: #052e16;
   
-  --color-status-wanted: #22c55e;
-  --color-status-wanted-bg: #052e16;
+  --color-status-wanted: #eab308;
+  --color-status-wanted-bg: #422006;
   
-  --color-status-sold: #f97316;
-  --color-status-sold-bg: #431407;
+  --color-status-sold: #64748b;
+  --color-status-sold-bg: #1e293b;
   
   --color-status-unregistered: #3b82f6;
   --color-status-unregistered-bg: #172554;

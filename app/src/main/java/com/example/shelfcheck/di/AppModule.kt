@@ -30,4 +30,10 @@ object AppModule {
     @Provides
     @Singleton
     fun provideBookDao(database: AppDatabase): BookDao = database.bookDao()
+
+    @Provides
+    @Singleton
+    fun provideSharedPreferences(
+        @ApplicationContext context: Context
+    ): android.content.SharedPreferences = context.getSharedPreferences("shelf_check_prefs", Context.MODE_PRIVATE)
 }

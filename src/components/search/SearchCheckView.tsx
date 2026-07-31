@@ -1,17 +1,23 @@
 import React, { useState, useEffect } from 'react';
-import { Search, Mic, AlertTriangle, CheckCircle, HelpCircle, ShoppingBag, BookOpen } from 'lucide-react';
+import { Search, Mic, AlertTriangle, CheckCircle, HelpCircle, ShoppingBag, BookOpen, Globe, Plus, Loader2, Check } from 'lucide-react';
 import { db } from '../../db/schema';
 import { Book, Series, BookStatus } from '../../types/book';
-import { matchBookByScan, updateBookStatus, addBook } from '../../db/bookRepository';
+import { matchBookByScan, updateBookStatus, addBook, removeBook, addSeries } from '../../db/bookRepository';
 import { parseVolumeSortKey } from '../../utils/volumeParser';
 import { playAlertSound, triggerVibration } from '../../utils/audio';
+import { searchExternalBooks, ExternalBookSearchResult } from '../../services/bookApi';
 
 interface SearchCheckViewProps {
-  isShoppingMode: boolean;
+  isMangaOnly?: boolean;
+  onToggleMangaOnly?: () => void;
   onRefreshData?: () => void;
 }
 
-export const SearchCheckView: React.FC<SearchCheckViewProps> = ({ isShoppingMode, onRefreshData }) => {
+export const SearchCheckView: React.FC<SearchCheckViewProps> = ({
+  isMangaOnly = true,
+  onToggleMangaOnly,
+  onRefreshData
+}) => {
   const [searchQuery, setSearchQuery] = useState('');
   const [seriesList, setSeriesList] = useState<Series[]>([]);
   const [books, setBooks] = useState<Book[]>([]);
@@ -25,6 +31,11 @@ export const SearchCheckView: React.FC<SearchCheckViewProps> = ({ isShoppingMode
 
   const [isListening, setIsListening] = useState(false);
 
+  // Web API 外部検索ステート
+  const [apiResults, setApiResults] = useState<ExternalBookSearchResult[]>([]);
+  const [isSearchingApi, setIsSearchingApi] = useState(false);
+  const [hasSearchedApi, setHasSearchedApi] = useState(false);
+
   const loadData = async () => {
     const s = await db.series.toArray();
     const b = await db.books.toArray();
@@ -35,6 +46,46 @@ export const SearchCheckView: React.FC<SearchCheckViewProps> = ({ isShoppingMode
   useEffect(() => {
     loadData();
   }, []);
+
+  // Web API 検索実行
+  const handleSearchExternalApi = async () => {
+    if (!searchQuery.trim()) return;
+    setIsSearchingApi(true);
+    setHasSearchedApi(true);
+    try {
+      const results = await searchExternalBooks(searchQuery, isMangaOnly);
+      setApiResults(results);
+    } catch (e) {
+      console.error(e);
+    } finally {
+      setIsSearchingApi(false);
+    }
+  };
+
+  // 外部API結果からローカル本棚に新規シリーズとして登録（重複チェック付き）
+  const handleImportApiBook = async (item: ExternalBookSearchResult) => {
+    const cleanItemTitle = item.title.trim().toLowerCase();
+    const exists = seriesList.some(s => s.title.trim().toLowerCase() === cleanItemTitle);
+
+    if (exists) {
+      alert(`「${item.title}」はすでに本棚に登録されています！`);
+      return;
+    }
+
+    await addSeries({
+      title: item.title,
+      author: item.author || '',
+      publisher: item.publisher || '',
+      totalVolumes: item.volumeCount || 10,
+      isCompleted: false,
+      coverUrl: item.coverUrl || '/covers/yuyushiki1.jpg',
+      tags: ['API取得']
+    });
+
+    await loadData();
+    if (onRefreshData) onRefreshData();
+    alert(`🎉 「${item.title}」を本棚に登録しました！`);
+  };
 
   // 音声入力検索
   const startVoiceSearch = () => {
@@ -65,18 +116,30 @@ export const SearchCheckView: React.FC<SearchCheckViewProps> = ({ isShoppingMode
     }
   };
 
-  // あいまい検索フィルタリング
+  // あいまい検索 ＆ 漫画のみフィルタリング
+  const nonMangaKeywords = ['小説', 'ノベル', '文庫', '新書', 'ファンブック', 'ガイドブック', '画集', '原画集', 'アンソロジー', 'イラスト集', 'レシピ'];
   const filteredSeries = seriesList.filter(s => {
-    if (!searchQuery.trim()) return true;
+    if (!searchQuery.trim()) {
+      if (isMangaOnly) {
+        return !nonMangaKeywords.some(kw => s.title.includes(kw));
+      }
+      return true;
+    }
     const q = searchQuery.toLowerCase().trim();
-    return (
+    const matches = (
       s.title.toLowerCase().includes(q) ||
       (s.titleKana && s.titleKana.toLowerCase().includes(q)) ||
       (s.author && s.author.toLowerCase().includes(q))
     );
+    if (!matches) return false;
+
+    if (isMangaOnly && !nonMangaKeywords.some(kw => q.includes(kw))) {
+      return !nonMangaKeywords.some(kw => s.title.includes(kw));
+    }
+    return true;
   });
 
-  // 巻数タップ時の4色照合アラート
+  // 巻数タップ時の3色照合アラート
   const handleSelectVolume = async (series: Series, volumeStr: string) => {
     const sId = String(series.id);
     const existingBook = books.find(b => b.seriesId === sId && b.volume === volumeStr);
@@ -87,11 +150,9 @@ export const SearchCheckView: React.FC<SearchCheckViewProps> = ({ isShoppingMode
     if (existingBook) {
       status = existingBook.status;
       if (status === 'owned') {
-        message = `⚠️ すでに所持しています！ (${series.title} ${volumeStr}巻)`;
+        message = `🟩 すでに所持しています (${series.title} ${volumeStr}巻)`;
       } else if (status === 'wanted') {
-        message = `✅ 探していた買い出し対象の本です！ (${series.title} ${volumeStr}巻)`;
-      } else if (status === 'sold') {
-        message = `⚠️ 過去に売却済みの本です (${series.title} ${volumeStr}巻)`;
+        message = `🟨 買いたい本（買い物リスト対象）です！ (${series.title} ${volumeStr}巻)`;
       }
     }
 
@@ -108,26 +169,29 @@ export const SearchCheckView: React.FC<SearchCheckViewProps> = ({ isShoppingMode
     else if (status === 'wanted') triggerVibration(150);
   };
 
-  // ステータストグル
+  // ステータストグル (未登録 -> 所持[緑] -> 買いたい[黄] -> 未登録)
   const handleToggleStatus = async (seriesId: string, seriesTitle: string, volumeStr: string) => {
     const existing = books.find(b => b.seriesId === seriesId && b.volume === volumeStr);
 
-    if (existing && existing.id) {
-      let nextStatus: BookStatus = 'owned';
-      if (existing.status === 'owned') nextStatus = 'sold';
-      else if (existing.status === 'sold') nextStatus = 'wanted';
-      else nextStatus = 'owned';
-
-      await updateBookStatus(existing.id, nextStatus);
-    } else {
-      await addBook({
-        seriesId,
-        title: seriesTitle,
-        volume: volumeStr,
-        volumeSortKey: parseVolumeSortKey(volumeStr),
-        status: 'owned',
-        isTemporary: false
-      });
+    try {
+      if (existing && existing.id) {
+        if (existing.status === 'owned') {
+          await updateBookStatus(existing.id, 'wanted');
+        } else {
+          await removeBook(seriesId, volumeStr, existing.id);
+        }
+      } else {
+        await addBook({
+          seriesId,
+          title: seriesTitle,
+          volume: volumeStr,
+          volumeSortKey: parseVolumeSortKey(volumeStr),
+          status: 'owned',
+          isTemporary: false
+        });
+      }
+    } catch (e) {
+      console.error('Failed to toggle status:', e);
     }
 
     await loadData();
@@ -166,18 +230,16 @@ export const SearchCheckView: React.FC<SearchCheckViewProps> = ({ isShoppingMode
   const getStatusTheme = (status: string) => {
     switch (status) {
       case 'owned':
-        return { bg: 'var(--color-status-owned-bg)', border: 'var(--color-status-owned)', text: '所持済み (重複警報)' };
+        return { bg: 'var(--color-status-owned-bg)', border: 'var(--color-status-owned)', text: '所持済み (緑)' };
       case 'wanted':
-        return { bg: 'var(--color-status-wanted-bg)', border: 'var(--color-status-wanted)', text: '買い出し対象 (購入推奨)' };
-      case 'sold':
-        return { bg: 'var(--color-status-sold-bg)', border: 'var(--color-status-sold)', text: '売却済み (再購入注意)' };
+        return { bg: 'var(--color-status-wanted-bg)', border: 'var(--color-status-wanted)', text: '買いたい本 (黄)' };
       default:
         return { bg: 'var(--color-status-unregistered-bg)', border: 'var(--color-status-unregistered)', text: '未所持・未登録' };
     }
   };
 
   return (
-    <div style={{ padding: '16px', display: 'flex', flexDirection: 'column', gap: '16px' }}>
+    <div style={{ padding: '16px', display: 'flex', flexDirection: 'column', gap: '16px', paddingBottom: '90px' }}>
       
       {/* 🔍 爆速インクリメンタル検索バー ＆ 🎙️ 音声入力 */}
       <div style={{ display: 'flex', gap: '8px', position: 'relative' }}>
@@ -187,7 +249,10 @@ export const SearchCheckView: React.FC<SearchCheckViewProps> = ({ isShoppingMode
             type="text"
             placeholder="タイトル・ひらがな・著者名で爆速検索 (例: ゆゆ, 呪術)"
             value={searchQuery}
-            onChange={(e) => setSearchQuery(e.target.value)}
+            onChange={(e) => {
+              setSearchQuery(e.target.value);
+              setHasSearchedApi(false);
+            }}
             style={{
               width: '100%',
               padding: '12px 14px 12px 42px',
@@ -234,91 +299,138 @@ export const SearchCheckView: React.FC<SearchCheckViewProps> = ({ isShoppingMode
         </div>
       )}
 
-      {/* 4色照合アラート判定ポップアップ */}
+      {/* 3色照合アラート判定モーダル（画面中央に固定表示） */}
       {selectedBookResult && (
-        <div style={{
-          backgroundColor: getStatusTheme(selectedBookResult.status).bg,
-          border: `2px solid ${getStatusTheme(selectedBookResult.status).border}`,
-          borderRadius: 'var(--radius-md)',
-          padding: '16px',
-          display: 'flex',
-          flexDirection: 'column',
-          alignItems: 'center',
-          textAlign: 'center',
-          gap: '10px'
-        }}>
-          {selectedBookResult.status === 'owned' && <AlertTriangle size={44} color="var(--color-status-owned)" />}
-          {selectedBookResult.status === 'wanted' && <CheckCircle size={44} color="var(--color-status-wanted)" />}
-          {selectedBookResult.status === 'sold' && <AlertTriangle size={44} color="var(--color-status-sold)" />}
-          {selectedBookResult.status === 'unregistered' && <HelpCircle size={44} color="var(--color-status-unregistered)" />}
+        <div
+          onClick={() => setSelectedBookResult(null)}
+          style={{
+            position: 'fixed',
+            inset: 0,
+            backgroundColor: 'rgba(0, 0, 0, 0.75)',
+            backdropFilter: 'blur(6px)',
+            zIndex: 1000,
+            display: 'flex',
+            alignItems: 'center',
+            justifyContent: 'center',
+            padding: '20px'
+          }}
+        >
+          <div
+            onClick={(e) => e.stopPropagation()}
+            style={{
+              width: '100%',
+              maxWidth: '380px',
+              backgroundColor: getStatusTheme(selectedBookResult.status).bg,
+              border: `2px solid ${getStatusTheme(selectedBookResult.status).border}`,
+              borderRadius: 'var(--radius-lg)',
+              padding: '20px',
+              display: 'flex',
+              flexDirection: 'column',
+              alignItems: 'center',
+              textAlign: 'center',
+              gap: '12px',
+              boxShadow: '0 20px 30px rgba(0, 0, 0, 0.6)'
+            }}
+          >
+            {selectedBookResult.status === 'owned' && <CheckCircle size={48} color="var(--color-status-owned)" />}
+            {selectedBookResult.status === 'wanted' && <ShoppingBag size={48} color="var(--color-status-wanted)" />}
+            {selectedBookResult.status === 'unregistered' && <HelpCircle size={48} color="var(--color-status-unregistered)" />}
 
-          <div>
-            <div style={{
-              fontSize: '0.72rem',
-              fontWeight: 800,
-              padding: '2px 8px',
-              borderRadius: '10px',
-              display: 'inline-block',
-              marginBottom: '4px',
-              backgroundColor: getStatusTheme(selectedBookResult.status).border,
-              color: '#000'
-            }}>
-              {getStatusTheme(selectedBookResult.status).text}
+            <div>
+              <div style={{
+                fontSize: '0.75rem',
+                fontWeight: 800,
+                padding: '3px 10px',
+                borderRadius: '12px',
+                display: 'inline-block',
+                marginBottom: '6px',
+                backgroundColor: getStatusTheme(selectedBookResult.status).border,
+                color: '#000'
+              }}>
+                {getStatusTheme(selectedBookResult.status).text}
+              </div>
+              <h3 style={{ fontSize: '1.2rem', fontWeight: 800, color: '#fff' }}>
+                {selectedBookResult.seriesTitle} (第{selectedBookResult.volume}巻)
+              </h3>
+              <p style={{ fontSize: '0.85rem', color: '#e2e8f0', marginTop: '6px' }}>
+                {selectedBookResult.message}
+              </p>
             </div>
-            <h3 style={{ fontSize: '1.15rem', fontWeight: 800 }}>
-              {selectedBookResult.seriesTitle} (第{selectedBookResult.volume}巻)
-            </h3>
-          </div>
 
-          <div style={{ display: 'flex', gap: '8px', width: '100%', marginTop: '4px' }}>
-            {selectedBookResult.status !== 'owned' && (
+            <div style={{ display: 'flex', gap: '8px', width: '100%', marginTop: '6px' }}>
+              {selectedBookResult.status !== 'owned' && (
+                <button
+                  onClick={handleMarkAsBought}
+                  style={{
+                    flex: 1,
+                    padding: '12px',
+                    borderRadius: '8px',
+                    backgroundColor: '#22c55e',
+                    color: '#000',
+                    fontWeight: 800,
+                    fontSize: '0.9rem',
+                    display: 'flex',
+                    alignItems: 'center',
+                    justifyContent: 'center',
+                    gap: '6px'
+                  }}
+                >
+                  <ShoppingBag size={18} /> 買った！（所持へ追加）
+                </button>
+              )}
               <button
-                onClick={handleMarkAsBought}
+                onClick={() => setSelectedBookResult(null)}
                 style={{
-                  flex: 1,
-                  padding: '10px',
-                  borderRadius: '6px',
-                  backgroundColor: '#22c55e',
-                  color: '#000',
+                  padding: '12px 18px',
+                  borderRadius: '8px',
+                  backgroundColor: 'var(--color-bg-card-hover)',
+                  color: '#fff',
                   fontWeight: 700,
-                  fontSize: '0.88rem',
-                  display: 'flex',
-                  alignItems: 'center',
-                  justifyContent: 'center',
-                  gap: '4px'
+                  fontSize: '0.88rem'
                 }}
               >
-                <ShoppingBag size={16} /> 買った！（所持へ追加）
+                閉じる
               </button>
-            )}
-            <button
-              onClick={() => setSelectedBookResult(null)}
-              style={{
-                padding: '10px 14px',
-                borderRadius: '6px',
-                backgroundColor: 'var(--color-bg-card-hover)',
-                color: '#fff',
-                fontWeight: 600,
-                fontSize: '0.85rem'
-              }}
-            >
-              閉じる
-            </button>
+            </div>
           </div>
         </div>
       )}
 
-      {/* 作品カード ＆ 巻数マトリクス */}
+      {/* ローカル本棚でのヒット作品 */}
       <div style={{ display: 'flex', flexDirection: 'column', gap: '12px' }}>
         {filteredSeries.length === 0 ? (
           <div style={{
             textAlign: 'center',
-            padding: '30px 16px',
+            padding: '24px 16px',
             backgroundColor: 'var(--color-bg-card)',
             borderRadius: 'var(--radius-md)',
-            color: 'var(--color-text-sub)'
+            color: 'var(--color-text-sub)',
+            display: 'flex',
+            flexDirection: 'column',
+            alignItems: 'center',
+            gap: '12px'
           }}>
-            「{searchQuery}」に一致する作品は見つかりませんでした。
+            <p>登録済み本棚に「{searchQuery}」に一致する作品はありません</p>
+            {searchQuery.trim() && (
+              <button
+                onClick={handleSearchExternalApi}
+                disabled={isSearchingApi}
+                style={{
+                  padding: '10px 18px',
+                  borderRadius: '20px',
+                  backgroundColor: '#3b82f6',
+                  color: '#fff',
+                  fontWeight: 800,
+                  fontSize: '0.88rem',
+                  display: 'flex',
+                  alignItems: 'center',
+                  gap: '6px'
+                }}
+              >
+                {isSearchingApi ? <Loader2 size={16} className="spin" /> : <Globe size={16} />}
+                Web API (Google / OpenBD) で検索する
+              </button>
+            )}
           </div>
         ) : (
           filteredSeries.map((series) => {
@@ -380,13 +492,10 @@ export const SearchCheckView: React.FC<SearchCheckViewProps> = ({ isShoppingMode
 
                     if (status === 'owned') {
                       bgColor = 'var(--color-status-owned)';
-                      textColor = '#fff';
+                      textColor = '#000';
                     } else if (status === 'wanted') {
                       bgColor = 'var(--color-status-wanted)';
                       textColor = '#000';
-                    } else if (status === 'sold') {
-                      bgColor = 'var(--color-status-sold)';
-                      textColor = '#fff';
                     }
 
                     return (
@@ -405,7 +514,7 @@ export const SearchCheckView: React.FC<SearchCheckViewProps> = ({ isShoppingMode
                           alignItems: 'center',
                           justifyContent: 'center',
                           transition: 'transform 0.1s ease',
-                          boxShadow: status === 'owned' ? '0 2px 6px rgba(239, 68, 68, 0.4)' : 'none'
+                          boxShadow: status === 'owned' ? '0 2px 6px rgba(34, 197, 94, 0.4)' : status === 'wanted' ? '0 2px 6px rgba(234, 179, 8, 0.4)' : 'none'
                         }}
                       >
                         {volStr}
@@ -419,6 +528,106 @@ export const SearchCheckView: React.FC<SearchCheckViewProps> = ({ isShoppingMode
           })
         )}
       </div>
+
+      {/* Web API 外部検索結果表示エリア */}
+      {hasSearchedApi && (
+        <div style={{ display: 'flex', flexDirection: 'column', gap: '10px', marginTop: '16px' }}>
+          <h3 style={{ fontSize: '1rem', fontWeight: 800, color: '#3b82f6', display: 'flex', alignItems: 'center', gap: '6px' }}>
+            <Globe size={18} /> Web API 検索結果 ({apiResults.length}件)
+          </h3>
+
+          {apiResults.map((item, idx) => {
+            const isAlreadyRegistered = seriesList.some(s => 
+              s.title.trim().toLowerCase() === item.title.trim().toLowerCase()
+            );
+
+            return (
+              <div
+                key={idx}
+                style={{
+                  display: 'flex',
+                  gap: '12px',
+                  backgroundColor: 'var(--color-bg-card)',
+                  padding: '12px',
+                  borderRadius: '10px',
+                  border: isAlreadyRegistered ? '1px solid rgba(34, 197, 94, 0.4)' : '1px solid var(--color-border)',
+                  alignItems: 'center'
+                }}
+              >
+                <div style={{ width: '48px', height: '66px', borderRadius: '6px', backgroundColor: '#1e293b', overflow: 'hidden', flexShrink: 0 }}>
+                  {item.coverUrl ? (
+                    <img src={item.coverUrl} alt={item.title} style={{ width: '100%', height: '100%', objectFit: 'cover' }} />
+                  ) : (
+                    <div style={{ display: 'flex', height: '100%', alignItems: 'center', justifyContent: 'center', fontSize: '0.7rem', color: '#94a3b8' }}>No Image</div>
+                  )}
+                </div>
+
+                <div style={{ flex: 1, minWidth: 0 }}>
+                  <h4 style={{ fontSize: '0.95rem', fontWeight: 800, color: '#fff', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+                    {item.title}
+                  </h4>
+                  <p style={{ fontSize: '0.78rem', color: 'var(--color-text-sub)', marginTop: '2px' }}>
+                    {item.author || '著者不明'} {item.publisher ? `• ${item.publisher}` : ''}
+                  </p>
+                  {isAlreadyRegistered && (
+                    <span style={{
+                      fontSize: '0.68rem',
+                      fontWeight: 800,
+                      color: '#22c55e',
+                      backgroundColor: 'rgba(34, 197, 94, 0.15)',
+                      padding: '2px 6px',
+                      borderRadius: '4px',
+                      marginTop: '4px',
+                      display: 'inline-block'
+                    }}>
+                      ✓ すでに本棚に登録済み
+                    </span>
+                  )}
+                </div>
+
+                {isAlreadyRegistered ? (
+                  <button
+                    disabled
+                    style={{
+                      padding: '8px 12px',
+                      borderRadius: '8px',
+                      backgroundColor: 'rgba(34, 197, 94, 0.2)',
+                      color: '#22c55e',
+                      border: '1px solid rgba(34, 197, 94, 0.4)',
+                      fontWeight: 800,
+                      fontSize: '0.78rem',
+                      display: 'flex',
+                      alignItems: 'center',
+                      gap: '4px',
+                      cursor: 'not-allowed'
+                    }}
+                  >
+                    <Check size={14} /> 登録済み
+                  </button>
+                ) : (
+                  <button
+                    onClick={() => handleImportApiBook(item)}
+                    style={{
+                      padding: '8px 14px',
+                      borderRadius: '8px',
+                      backgroundColor: '#3b82f6',
+                      color: '#fff',
+                      border: 'none',
+                      fontWeight: 800,
+                      fontSize: '0.8rem',
+                      display: 'flex',
+                      alignItems: 'center',
+                      gap: '4px'
+                    }}
+                  >
+                    <Plus size={14} /> 本棚に追加
+                  </button>
+                )}
+              </div>
+            );
+          })}
+        </div>
+      )}
 
     </div>
   );
